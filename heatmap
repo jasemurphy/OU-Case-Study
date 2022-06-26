@@ -1,0 +1,38 @@
+#heatmap for illustrating interaction of demographic effects
+#takes 3 inputs, two demographic factors drawn from the studentInfo dataset, and the final result you're assessing, e.g. Pass.
+
+heatmap <- function(x,y,z){
+studentInfo %>%
+  group_by({{x}}, {{y}}, final_result) %>%
+  mutate(countresult = n()) %>%
+  ungroup() %>%
+  group_by({{x}}, {{y}}) %>%
+  mutate(countdemog = n()) %>%
+  ungroup() %>%
+  mutate(share = countresult/countdemog) %>%
+  group_by({{x}}, {{y}}, final_result) %>%
+  mutate(resultrate = mean(share)) %>%
+    ungroup() %>%
+  filter(final_result == {{z}}) %>%
+
+  ggplot()+
+  aes(x={{x}}, y = {{y}})+
+  geom_tile(aes(fill = resultrate, alpha = countdemog), show.legend = FALSE)+
+  geom_text(aes(alpha = countdemog, label = paste0(round(resultrate*100), "%")), vjust = -1,  show.legend = FALSE)+
+    geom_text(aes(label = paste0(countresult, " / ", countdemog)), vjust = 1, size = 2.5,  show.legend = FALSE)+
+  scale_fill_gradientn(colours = c("lemon chiffon", "yellow", "gold", "orange", "orangered", "red", "firebrick"))+
+    labs(title = paste("Share of students achieving a final result of", z, "by demographic characteristics"))+
+    theme(panel.background = element_rect(fill = "white"))
+}
+#examples:
+heatmap(gender, age_band, "Withdrawn")
+heatmap(disability, highest_education, "Distinction")
+heatmap(gender, highest_education, "Withdrawn")
+heatmap(gender, disability, "Withdrawn")
+heatmap(gender, studied_credits, "Withdrawn")
+heatmap(gender, region, "Withdrawn")
+
+heatmap(disability, imd_band,  "Fail") #there are some weird things going on in here. disabled people pass less. but are comparable for fail.]
+
+heatmap(imd_band, highest_education, "Fail")
+
