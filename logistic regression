@@ -1,3 +1,5 @@
+This document contains a number of models used to analyse different aspects of the Open University Learning Analytics dataset
+
 library(modelr)
 library(caTools)
 library(ROCR)
@@ -367,8 +369,7 @@ logitfunction(big280)
 ( 4475+251  )  /  ( 131 +751  + 4475+251  )  #    84 % accuracy   
 
 
-
-#Analysis of which parts of the vle matter most:
+#Final model and resulting chart: Analysis of which parts of the vle matter most:
 
 
 important <- studentvle %>% left_join(vle, by = "id_site") %>% 
