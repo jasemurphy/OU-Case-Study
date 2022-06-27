@@ -153,8 +153,140 @@ studentRegistration %>%
   geom_hex(bins = 25)+
   scale_x_continuous(limits = c(-350, 50))+
   scale_y_continuous(limits = c(-300, 250))+scale_fill_gradientn(colours = c("pale goldenrod", "gold", "orangered", "red", "firebrick"))
+          
+          
+#good table telling you biggest days for dropout. it's day 12. many courses shed 5-10% of their stuents on day 12.
 
-#I need to improve my visualisations of the vlestuff and put them here.
+  studentRegistration %>%
+    mutate(dropouts = if_else(!is.na(date_unregistration ), as.character(id_student), NA_character_)) %>%
+    mutate(subject = paste0(code_module, code_presentation)) %>%
+    group_by(subject) %>%
+    mutate(enrolled = n()) %>%
+    ungroup() %>%
+    filter(!is.na(date_unregistration)) %>%
+    group_by(subject, date_unregistration) %>%
+    mutate(n_dropouts_per_day = n()) %>%
+    ungroup() %>%
+    mutate(dropshare = n_dropouts_per_day / enrolled) %>%
+    select(subject, date_unregistration, enrolled, n_dropouts_per_day, dropshare) %>%
+    unique() %>%
+    arrange(desc(dropshare)) %>% print(n=50)
+          
+          
+          
+          
+#find best and worst students: chart 1 distribution
+
+studentAssessment %>%
+  group_by(id_student) %>%
+  mutate(average = mean(score)) %>%
+  ungroup() %>%
+  select(id_student, average) %>%
+  unique() %>%
+  mutate(id_student = as.factor(id_student),
+         order = fct_reorder(id_student, average) ) %>%
+  ggplot()+
+  aes(x=order, y = average)+
+  geom_point()
+
+
+#chart 2: facet by region
+studentAssessment %>%
+  group_by(id_student) %>%
+  mutate(average = mean(score)) %>%
+  ungroup() %>%
+  select(id_student, average) %>%
+  unique() %>%
+  left_join(studentInfo, by = "id_student") %>%
+  mutate(id_student = as.factor(id_student),
+         order = fct_reorder(id_student, average) ) %>%
+  ggplot()+
+  aes(x=order, y = average, colour = gender)+
+  geom_point()+
+  facet_wrap(~region)
+
+ggsave("results curve by region, colour by gender.jpeg")
+
+
+#chart 3: facet by imd
+studentAssessment %>%
+  group_by(id_student) %>%
+  mutate(average = mean(score)) %>%
+  ungroup() %>%
+  select(id_student, average) %>%
+  unique() %>%
+  left_join(studentInfo, by = "id_student") %>%
+  mutate(id_student = as.factor(id_student),
+         order = fct_reorder(id_student, average) ) %>%
+  ggplot()+
+  aes(x=order, y = average, colour = gender)+
+  geom_point()+
+  facet_wrap(~imd_band, nrow = 1)
+
+ggsave("results curve by imd status, colour by gender.jpeg")
+
+
+
+#Visualisations of vle use.
+          
+          
+disadvantagedStudentsWhoPassed <- studentInfo %>%
+  filter(imd_band %in% c("0-10%", "10-20%")) %>%
+  filter(disability == "Y") %>%
+  filter(highest_education %in% c("Lower Than A Level", "No Formal quals" )) %>%
+  filter(final_result %in% c("Pass", "Distinction")) %>%
+  select(id_student) %>% pull()
+
+disadvantagedStudentsWhoFailed <- studentInfo %>%
+  filter(imd_band %in% c("0-10%", "10-20%")) %>%
+  filter(disability == "Y") %>%
+  filter(highest_education %in% c("Lower Than A Level", "No Formal quals" )) %>%
+  filter(final_result == "Fail") %>%
+  select(id_student) %>% pull()
+          
+          
+studentvle %>%
+  filter(id_student %in% disadvantagedStudentsWhoPassed) %>%
+  group_by(id_site, date) %>%
+  mutate(clicksperitemperday = sum(sum_click)/Passedcount) %>%
+  ungroup() %>%
+  left_join(vle, by = "id_site") %>%
+  mutate(id_site = as.factor(id_site)) %>%
+  ggplot()+
+  aes(x= date ,y= clicksperitemperday, group = activity_type, fill = activity_type )+
+  geom_col(position = "stack")+
+  labs(title = "Total resource access by disadvantaged students who passed")+
+  theme(legend.text = element_text(size = 6),
+        plot.title = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 6))
+
+ggsave("resource access by disadvantaged students who passed.jpeg")
+
+
+Failedcount <- resultcounttable %>%
+  filter(final_result == "Fail") %>%
+  select(resultcount) %>% pull()
+
+
+studentvle %>%
+  filter(id_student %in% disadvantagedStudentsWhoFailed) %>%
+  group_by(id_site, date) %>%
+  mutate(clicksperitemperday = sum(sum_click)/Failedcount) %>%
+  ungroup() %>%
+  left_join(vle, by = "id_site") %>%
+  mutate(id_site = as.factor(id_site)) %>%
+  ggplot()+
+  aes(x= date ,y= clicksperitemperday, group = activity_type, fill = activity_type )+
+  geom_col(position = "stack")+
+labs(title = "Total resource access by disadvantaged students who failed")+
+  theme(legend.text = element_text(size = 6),
+        plot.title = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 6))
+
+
+ggsave("Resource access by disadvantaged students who failed.jpeg")
           
           #assessments
           
@@ -180,3 +312,6 @@ studentAssessment %>%
   labs(title = "are students performing better on computer-marked assessments (CMA) than on tutor-marked assessments (TMA) ? ")
 
 
+
+          
+          
