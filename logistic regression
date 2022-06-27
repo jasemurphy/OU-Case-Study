@@ -1,0 +1,423 @@
+#function to run a classifier model, by splitting data into test and training data, training, predicting, reporting results.
+
+logitfunction <- function(x){
+
+  split <- sample.split(x$result)          #default is 2/3: 1/3 split
+  train_reg <- subset(x, split == "TRUE")
+  test_reg <- subset(x, split == "FALSE")
+
+  train <- glm(result ~ ., data = train_reg, family = "binomial")  #using binomial means we need to collapse the student results into binary outcomes
+
+ print( anova(train, test = "Chisq"))
+ print( pR2(train))
+
+  predict_reg <- predict(train, test_reg, type = "response")
+  predict_reg <- ifelse(predict_reg>.5,1,0)                  #values above 0.5 are considered a prediction of the outcome.
+
+  print(table(test_reg$result, predict_reg))
+
+  missing_classerr <- mean(predict_reg != test_reg$result)
+  print(paste("Accuracy =", 1-missing_classerr))
+}
+
+# If we collapse the student results into two categories and put that data into the above function we get a classification accuracy of 61% 
+# based on the demographic categories alone 
+
+
+twocategories  <- studentInfo %>%
+  mutate(imd_band = if_else(is.na(imd_band ), "other", imd_band) ) %>%   #removing NAs
+  mutate(result = if_else(final_result== "Fail", "1", NA_character_),    #setting contrasts
+         result = if_else(final_result== "Withdrawn", "1", result),
+         result = if_else(final_result== "Pass", "0", result),
+          result = if_else(final_result== "Distinction", "0", result)) %>%
+  mutate(gender = as.factor(gender),
+         region = as.factor(region),
+         highest_education = as.factor(highest_education),
+         imd_band = as.factor(imd_band),
+         age_band = as.factor(age_band),
+         disability = as.factor(disability),
+         result = as.factor(result)) %>%
+  select(-final_result, -id_student, -code_module, -code_presentation)
+
+logitfunction(twocategories)
+
+
+# Next we create a function that adds the student's first assessment in the subject to the demographics, 
+# to see if early test data helps increase prediction accuracy. The input to the function is the string that identifies of one of the subjects, 
+# which can be found at the following snippet:
+
+assessments %>% mutate(subject = paste(code_module, code_presentation)) %>% select(subject) %>% unique()
+
+
+first_testfn <- function(x){
+
+first_test <- assessments %>% 
+mutate(subject = paste0(code_module, "_", code_presentation)) %>%
+  filter(subject == x) %>% 
+  arrange(date) %>% 
+  filter(!is.na(date)) %>% 
+  filter(date == min(date)) %>% 
+  select(id_assessment) %>% 
+  pull()
+
+Twocatsfirsttest <- studentAssessment %>% 
+filter(id_assessment %in% c(first_test)) %>% 
+left_join( studentInfo, by = "id_student") %>%
+mutate(imd_band = if_else(is.na(imd_band ), "other", imd_band) ) %>%
+mutate(result = if_else(final_result== "Fail", "1", NA_character_),
+       result = if_else(final_result== "Withdrawn", "1", result),
+       result = if_else(final_result== "Pass", "0", result),
+       result = if_else(final_result== "Distinction", "0", result)) %>%
+       mutate(gender = as.factor(gender),
+       region = as.factor(region),
+       highest_education = as.factor(highest_education),
+       imd_band = as.factor(imd_band),
+       age_band = as.factor(age_band),
+       disability = as.factor(disability),
+       result = as.factor(result)) %>%
+select(-final_result, -id_student, -code_module, -code_presentation, -id_assessment, -is_banked)
+
+logitfunction(Twocatsfirsttest)
+}
+
+first_testfn("BBB_2013J")  #this gives classification accuracy of 68% despite the smaller sample size. i.e.Adding just the student's first test result is very useful. 
+
+#the next model extends the concept to looks at events (assessments, resource access) up to day 60 of the course to see how much extra explanatory power is available
+
+
+big60function <- function(x){
+  tests60 <- assessments %>% 
+    mutate(subject = paste0(code_module, "_", code_presentation)) %>% 
+    filter(!is.na(date)) %>%
+    group_by(subject) %>% 
+    arrange(date)  %>% 
+    filter(date <60) %>% 
+    ungroup() %>% 
+    select(id_assessment) %>% pull()
+  
+  vle60 <- studentvle %>%
+    left_join(vle, by = "id_site") %>%
+    filter(date<60) %>%
+    mutate(subject = paste0(code_module.x, "_", code_presentation.x)) %>% 
+    filter(subject == x) %>% 
+    group_by(id_student, activity_type) %>%
+    mutate(sum = sum(sum_click)) %>%
+    ungroup() %>%
+    select(id_student, activity_type, sum) %>%
+    distinct() %>%
+    pivot_wider( names_from = activity_type, values_from = sum) %>%
+    mutate_all(~replace_na(., 0))
+  
+  
+  big60 <- studentAssessment %>% filter(id_assessment %in% c(tests60)) %>% 
+    left_join(assessments, by = "id_assessment") %>% 
+    mutate(subject = paste0(code_module, "_", code_presentation)) %>% 
+    filter(subject == {{x}}) %>% 
+    select(id_student, score, id_assessment) %>% 
+    pivot_wider(names_from = "id_assessment", values_from = "score") %>% 
+    left_join( studentInfo, by = "id_student") %>%
+    mutate(imd_band = if_else(is.na(imd_band ), "other", imd_band) ) %>%
+    mutate_if(is.numeric, ~replace_na(., 0)) %>% 
+    mutate(result = if_else(final_result== "Fail", "1", NA_character_),
+           result = if_else(final_result== "Withdrawn", "1", result),
+           result = if_else(final_result== "Pass", "0", result),
+           result = if_else(final_result== "Distinction", "0", result)) %>%
+    mutate(gender = as.factor(gender),
+           region = as.factor(region),
+           highest_education = as.factor(highest_education),
+           imd_band = as.factor(imd_band),
+           age_band = as.factor(age_band),
+           disability = as.factor(disability),
+           result = as.factor(result)) %>%
+    left_join(vle60, by = "id_student") %>% 
+    select(-final_result, -id_student, -code_module, -code_presentation) 
+  
+  
+  logitfunction(big60)
+  
+}
+
+big60function("AAA_2013J")
+big60function("AAA_2014J") 
+big60function("BBB_2013B") 
+big60function("BBB_2013J")
+big60function("BBB_2014B") 
+big60function("BBB_2014J") 
+big60function("CCC_2014B"). These max out at about 75% accuracy in classification, certainly not a crystal ball.
+
+
+
+
+#4 TIME COMPARISONS. This analysis breaks the course into 4 quarters to explore if there is a key period for success.
+My hypothesis was acting early would be crucial.  Turns out late actions matter a lot. Keeping students engaged could have a big payoff.
+
+
+
+
+#1. first 65 days
+
+tests55 <- assessments %>% 
+  mutate(subject = paste0(code_module, "_", code_presentation)) %>% 
+  filter(!is.na(date)) %>%
+  group_by(subject) %>% 
+  arrange(date)  %>% 
+  filter(date <55) %>% 
+  ungroup() %>% 
+  select(id_assessment) %>% pull()
+
+vle55 <- studentvle %>%
+  left_join(vle, by = "id_site") %>%
+  filter(date<55) %>%
+  mutate(subject = paste0(code_module.x, "_", code_presentation.x)) %>% 
+  group_by(id_student, activity_type) %>%
+  mutate(sum = sum(sum_click)) %>%
+  ungroup() %>%
+  select(id_student, activity_type, sum) %>%
+  distinct() %>%
+  pivot_wider( names_from = activity_type, values_from = sum) %>%
+  mutate_all(~replace_na(., 0))
+
+
+big55 <- studentAssessment %>% filter(id_assessment %in% c(tests55)) %>% 
+  left_join(assessments, by = "id_assessment") %>% 
+  mutate(subject = paste0(code_module, "_", code_presentation)) %>% 
+  select(id_student, score, id_assessment) %>% 
+  pivot_wider(names_from = "id_assessment", values_from = "score") %>% 
+  left_join( studentInfo, by = "id_student") %>%
+  mutate(imd_band = if_else(is.na(imd_band ), "other", imd_band) ) %>%
+  mutate_if(is.numeric, ~replace_na(., 0)) %>% 
+  mutate(result = if_else(final_result== "Fail", "1", NA_character_),
+         result = if_else(final_result== "Withdrawn", "1", result),
+         result = if_else(final_result== "Pass", "0", result),
+         result = if_else(final_result== "Distinction", "0", result)) %>%
+  mutate(gender = as.factor(gender),
+         region = as.factor(region),
+         highest_education = as.factor(highest_education),
+         imd_band = as.factor(imd_band),
+         age_band = as.factor(age_band),
+         disability = as.factor(disability),
+         result = as.factor(result)) %>%
+  left_join(vle55, by = "id_student") %>% 
+  select(-final_result, -id_student, -code_module, -code_presentation) 
+
+
+logitfunction(big55)
+
+(3805+2019)/ (3805+2019+825+1540) #71% accuracy.  #note these numbers can move around a bit depending on the sample.Split.
+
+#2. 55- 120  days
+
+tests120 <- assessments %>% 
+  mutate(subject = paste0(code_module, "_", code_presentation)) %>% 
+  filter(!is.na(date)) %>%
+  group_by(subject) %>% 
+  arrange(date)  %>% 
+  filter(date<120 & date>55) %>%
+  ungroup() %>% 
+  select(id_assessment) %>% pull()
+
+vle120 <- studentvle %>%
+  left_join(vle, by = "id_site") %>%
+  filter(date<120 & date>55) %>%
+  mutate(subject = paste0(code_module.x, "_", code_presentation.x)) %>% 
+  group_by(id_student, activity_type) %>%
+  mutate(sum = sum(sum_click)) %>%
+  ungroup() %>%
+  select(id_student, activity_type, sum) %>%
+  distinct() %>%
+  pivot_wider( names_from = activity_type, values_from = sum) %>%
+  mutate_all(~replace_na(., 0))
+
+
+big120 <- studentAssessment %>% filter(id_assessment %in% c(tests120)) %>% 
+  left_join(assessments, by = "id_assessment") %>% 
+  mutate(subject = paste0(code_module, "_", code_presentation)) %>% 
+  select(id_student, score, id_assessment) %>% 
+  pivot_wider(names_from = "id_assessment", values_from = "score") %>% 
+  left_join( studentInfo, by = "id_student") %>%
+  mutate(imd_band = if_else(is.na(imd_band ), "other", imd_band) ) %>%
+  mutate_if(is.numeric, ~replace_na(., 0)) %>% 
+  mutate(result = if_else(final_result== "Fail", "1", NA_character_),
+         result = if_else(final_result== "Withdrawn", "1", result),
+         result = if_else(final_result== "Pass", "0", result),
+         result = if_else(final_result== "Distinction", "0", result)) %>%
+  mutate(gender = as.factor(gender),
+         region = as.factor(region),
+         highest_education = as.factor(highest_education),
+         imd_band = as.factor(imd_band),
+         age_band = as.factor(age_band),
+         disability = as.factor(disability),
+         result = as.factor(result)) %>%
+  left_join(vle120, by = "id_student") %>% 
+  select(-final_result, -id_student, -code_module, -code_presentation) 
+
+
+logitfunction(big120)
+
+
+(4669+914)/ (4669+914+1461+418) #75% accuracy
+
+
+#3. 120- 185  days
+
+tests185 <- assessments %>% 
+  mutate(subject = paste0(code_module, "_", code_presentation)) %>% 
+  filter(!is.na(date)) %>%
+  group_by(subject) %>% 
+  arrange(date)  %>% 
+  filter(date>120 & date<185) %>%
+  ungroup() %>% 
+  select(id_assessment) %>% pull()
+
+vle185 <- studentvle %>%
+  left_join(vle, by = "id_site") %>%
+  filter(date<185 & date>120) %>%
+  mutate(subject = paste0(code_module.x, "_", code_presentation.x)) %>% 
+  group_by(id_student, activity_type) %>%
+  mutate(sum = sum(sum_click)) %>%
+  ungroup() %>%
+  select(id_student, activity_type, sum) %>%
+  distinct() %>%
+  pivot_wider( names_from = activity_type, values_from = sum) %>%
+  mutate_all(~replace_na(., 0))
+
+
+big185 <- studentAssessment %>% filter(id_assessment %in% c(tests185)) %>% 
+  left_join(assessments, by = "id_assessment") %>% 
+  mutate(subject = paste0(code_module, "_", code_presentation)) %>% 
+  select(id_student, score, id_assessment) %>% 
+  pivot_wider(names_from = "id_assessment", values_from = "score") %>% 
+  left_join( studentInfo, by = "id_student") %>%
+  mutate(imd_band = if_else(is.na(imd_band ), "other", imd_band) ) %>%
+  select( -code_module, -code_presentation) %>% 
+  mutate_if(is.numeric, ~replace_na(., 0)) %>% 
+  mutate(result = if_else(final_result== "Fail", "1", NA_character_),
+         result = if_else(final_result== "Withdrawn", "1", result),
+         result = if_else(final_result== "Pass", "0", result),
+         result = if_else(final_result== "Distinction", "0", result)) %>%
+  mutate(gender = as.factor(gender),
+         region = as.factor(region),
+         highest_education = as.factor(highest_education),
+         imd_band = as.factor(imd_band),
+         age_band = as.factor(age_band),
+         disability = as.factor(disability),
+         result = as.factor(result)) %>%
+  left_join(vle185, by = "id_student") %>% 
+  select(-final_result) 
+
+logitfunction(big185)
+
+(  4788+629  )  / (  4788 + 289+ 1023 + 629  ) #    80% accuracy
+
+# part4.
+
+
+tests280 <- assessments %>% 
+  mutate(subject = paste0(code_module, "_", code_presentation)) %>% 
+  filter(!is.na(date)) %>%
+  group_by(subject) %>% 
+  arrange(date)  %>% 
+  filter(date<280 & date>184) %>%
+  ungroup() %>% 
+  select(id_assessment) %>% pull()
+
+vle280 <- studentvle %>%
+  left_join(vle, by = "id_site") %>%
+  filter(date<280 & date>184) %>%
+  mutate(subject = paste0(code_module.x, "_", code_presentation.x)) %>% 
+  group_by(id_student, activity_type) %>%
+  mutate(sum = sum(sum_click)) %>%
+  ungroup() %>%
+  select(id_student, activity_type, sum) %>%
+  distinct() %>%
+  pivot_wider( names_from = activity_type, values_from = sum) %>%
+  mutate_all(~replace_na(., 0))
+
+
+big280 <- studentAssessment %>% filter(id_assessment %in% c(tests280)) %>% 
+  left_join(assessments, by = "id_assessment") %>% 
+  mutate(subject = paste0(code_module, "_", code_presentation)) %>% 
+  select(id_student, score, id_assessment) %>% 
+  pivot_wider(names_from = "id_assessment", values_from = "score") %>% 
+  left_join( studentInfo, by = "id_student") %>%
+  mutate(imd_band = if_else(is.na(imd_band ), "other", imd_band) ) %>%
+  select( -code_module, -code_presentation) %>% 
+  mutate_if(is.numeric, ~replace_na(., 0)) %>% 
+  mutate(result = if_else(final_result== "Fail", "1", NA_character_),
+         result = if_else(final_result== "Withdrawn", "1", result),
+         result = if_else(final_result== "Pass", "0", result),
+         result = if_else(final_result== "Distinction", "0", result)) %>%
+  mutate(gender = as.factor(gender),
+         region = as.factor(region),
+         highest_education = as.factor(highest_education),
+         imd_band = as.factor(imd_band),
+         age_band = as.factor(age_band),
+         disability = as.factor(disability),
+         result = as.factor(result)) %>%
+  left_join(vle280, by = "id_student") %>% 
+  select(-final_result) 
+
+logitfunction(big280)
+( 4475+251  )  /  ( 131 +751  + 4475+251  )  #    84 % accuracy   
+
+
+
+#Analysis of which parts of the vle matter most:
+
+
+important <- studentvle %>% left_join(vle, by = "id_site") %>% 
+  mutate(subject = paste0( code_module.x, "_", code_presentation.x)) %>% group_by(activity_type) %>% 
+  mutate(count = n()) %>% 
+  mutate(total = sum(sum_click)) %>% 
+  select(activity_type, count, total) %>% distinct
+
+finalresults <- studentInfo %>%  select(id_student, final_result)
+
+vletypes <- studentvle %>%
+  mutate(subject = paste0(code_module, "_", code_presentation)) %>% 
+  left_join(vle, by = "id_site") %>%
+  group_by(id_student, activity_type) %>%
+  mutate(sum = sum(sum_click)) %>%
+  ungroup() %>%
+  select(id_student, activity_type, sum) %>%
+  distinct() %>%
+  pivot_wider( names_from = activity_type, values_from = sum) %>%
+  mutate_if(is.numeric, ~replace_na(., 0)) %>% 
+  left_join(finalresults, by = "id_student")  %>%
+  mutate(result = if_else(final_result== "Fail", "1", NA_character_),
+         result = if_else(final_result== "Withdrawn", "1", result),
+         result = if_else(final_result== "Pass", "0", result),
+         result = if_else(final_result== "Distinction", "0", result)) %>%
+ mutate( result = as.factor(result)) %>%
+  select(-final_result, -id_student)
+
+logitfunction(vletypes)
+
+vlemodel <- glm(result ~ ., data = vletypes, family = "binomial")
+
+heyo <- summary(vlemodel) 
+
+dimnames(heyo$coefficients)[1] %>% 
+  unlist() %>% 
+  as_tibble() %>% 
+  cbind(heyo$coefficients %>% 
+          as_tibble() ) %>% 
+  as_tibble() %>% 
+  arrange((Estimate)) %>% mutate(activity_type = value) %>% 
+  left_join(important, by = "activity_type") %>% 
+  mutate(Estimate = Estimate*-1) %>% 
+  filter(total>64000) %>% 
+  filter(`Pr(>|z|)`<.01) %>% 
+  ggplot()+
+  aes(x= total, y= Estimate, colour = `Pr(>|z|)`)+
+  geom_point()+
+  geom_text(aes(label = activity_type), hjust =-0.1)+
+  scale_colour_gradientn(colours = c( "red", "purple", "blue", "dark cyan"))+
+  scale_x_continuous(labels = scales::comma, limits =c(0,12500000))+
+  labs(title = "A handful of heavily accessed resources have a reliable, positive impact on student success.",
+       subtitle = "The effect may be small per click but the clicks add up.",
+       caption = "Output of logistic regression predicting success based on resource access. \nDatapoints shows are those with p values under .01 and which are in the top 12 for total clicks ")+
+  xlab("Number of times resource was accessed in dataset")+
+  theme_bw()
+
+
